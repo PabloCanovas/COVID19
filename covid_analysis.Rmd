@@ -1,0 +1,367 @@
+---
+title: "Analyzing COVID data from COVID19 R package"
+author: "Pablo Cánovas Tourné"
+date: "May 25, 2020"
+output:
+ html_document: 
+  theme: united  
+  highlight: tango
+editor_options: 
+  chunk_output_type: console
+---
+
+##### The idea behind this document was to play and discover some of the info contained in the [COVID19 R package](https://CRAN.R-project.org/package=COVID19) which collects data across several governmental sources. This package is being developed by the Guidotti and Ardia from [COVID19 Data Hub](https://covid19datahub.io). 
+##### Later, I will add to the analysis the historical track record of deaths over last years for some european countries and try to address if deaths by COVID19 are being reported accurately. This data is collected in [The Human Mortality Database](https://www.mortality.org/).
+
+##### Altough it may seem a bit overkill, I am showing all the code because that's the main idea of the blog and there are already many other sources where you can find deep analysis
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(COVID19)
+library(tidyverse)
+library(lubridate)
+library(magrittr)
+library(ggplot2)
+library(ggthemes)
+library(ggrepel)
+library(plotly)
+```
+
+
+```{r, echo=FALSE}
+theme_custom <- function() {
+  theme(axis.title.x = element_text(size = 12),
+        axis.title.y = element_blank(), 
+        plot.title = element_text(size = 16),
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(), 
+        legend.position = "bottom", 
+        legend.title = element_blank())
+}
+```
+
+##### I want to focus mainly on the most populated countries of the world because some of them are among the most affected by the virus
+
+```{r}
+covid_deaths <- covid19(verbose = FALSE) %>%
+  ungroup() %>% 
+  mutate(Week = week(date)) %>% 
+  select(Country = id, Date = date, Week, Deaths = deaths, Population = population) %>% 
+  filter(Date < today() %>% add(days(-1))) %>% 
+  mutate(Deaths_by_1Mpop = round(Deaths/Population*1e6)) 
+
+top_deaths_countries_df <- covid_deaths %>% 
+  group_by(Date) %>% 
+  top_n(100, Population) %>% 
+  ungroup()
+```
+
+```{r, out.width='100%'}
+top_deaths_countries <- top_deaths_countries_df %>% 
+  group_by(Country) %>% 
+  filter(Date == max(Date)) %>% 
+  ungroup() %>% 
+  top_n(10, Deaths) %>% 
+  pull(Country) 
+
+top_pop_deaths <- covid_deaths %>% 
+  filter(Country %in% top_deaths_countries)
+
+deaths_plot <- top_pop_deaths %>% 
+  filter(Date >= ymd(20200301)) %>% 
+  ggplot(aes(Date, Deaths, col = Country)) + 
+  geom_line(size = 1, show.legend = F) +
+  labs(title = "Total deaths due to COVID-19", 
+       caption = "Source: covid19datahub.io") + 
+  theme_minimal() + 
+  theme_custom() +
+  scale_color_tableau() +
+  NULL
+
+deaths_plot %>%
+  ggplotly() %>%
+  layout(legend = list(orientation = "h", y = 0),
+         annotations = list(x = 1, y = 1.05, text = "Source: covid19datahub.io",
+                            showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
+```
+
+##### What about the countries most affected by the virus in deaths relative to the population?
+
+```{r, out.width='100%'}
+top_deaths1m_countries <- top_deaths_countries_df %>% 
+  group_by(Country) %>% 
+  filter(Date == max(Date)) %>% 
+  ungroup() %>% 
+  top_n(10, Deaths_by_1Mpop) %>% 
+  pull(Country) 
+
+top_pop_deaths1m <- covid_deaths %>% 
+  filter(Country %in% top_deaths1m_countries)
+
+top_deaths_1m_plot <- top_pop_deaths1m %>% 
+  filter(Date >= ymd(20200301)) %>% 
+  select(-Deaths) %>% 
+  rename(Deaths = Deaths_by_1Mpop) %>% 
+  ggplot(aes(Date, Deaths, col = Country)) + 
+  geom_line(size = 1, show.legend = F) +
+  labs(title = "Total deaths by 1M people", 
+       caption = "Source: covid19datahub.io") + 
+  theme_minimal() + 
+  theme_custom() + 
+  scale_color_tableau() +
+  NULL
+
+top_deaths_1m_plot %>% 
+  ggplotly() %>%
+  layout(legend = list(orientation = "h", y = 0),
+         annotations = list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
+                            showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
+```
+
+##### Now, the pandemic didn't explode in every country at the same time. Because of the exponential nature of the problem, it is also useful to display the information relative to the day certain number of cases or deaths are reached. Here I'm showing in logarithmic scale the evolution of deaths since the day 1 death per million people were counted.
+
+```{r, out.width='100%'}
+top_over_1death1m <- top_pop_deaths1m %>% 
+  group_by(Country) %>% 
+  filter(Deaths_by_1Mpop >= 1) %>% 
+  top_n(1, -Deaths_by_1Mpop) %>% 
+  group_split() %>% 
+  map_dfr(~ .x %>% head(1)) %>% 
+  select(Country, Date_over_1death = Date)
+
+top_days_since_1death1m <- top_pop_deaths1m %>% 
+  group_by(Country) %>% 
+  filter(Deaths_by_1Mpop >= 1) %>% 
+  ungroup() %>% 
+  left_join(top_over_1death1m, by = "Country") %>%  
+  mutate(Days_since_1death = difftime(Date, Date_over_1death, units = "days") %>% as.integer())
+
+top_deaths_1day_1m_plot <- top_days_since_1death1m %>% 
+  rename(Day = Days_since_1death) %>% 
+  ggplot(aes(Day, Deaths_by_1Mpop, col = Country)) + 
+  geom_line(size = 1, show.legend = F) +
+  scale_y_log10() + 
+  labs(title = "Total deaths per million people",
+       subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
+       caption = "Source: covid19datahub.io") + 
+  theme_minimal() + 
+  theme_custom() +
+  scale_color_tableau() +
+  NULL
+
+top_deaths_1day_1m_plot %>% 
+  ggplotly() %>%
+  layout(title = 
+           list(text = paste0('Total deaths per million people',
+                              '<br>',
+                              '<sup>',
+                              'X-axis counts days since 1 death by 1M pop for each country',
+                              '</sup>')),
+         legend = list(orientation = "h", y = 0),
+         annotations = 
+           list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
+                showarrow = F, xref = 'paper', yref = 'paper',
+                font = list(size = 10, color = "black")))
+```
+
+##### It is also useful to look at the current trend: How is the evolution of the daily new deaths? I'm showing here the daily deaths per million population to have a better sense of the severity of the current state in each country. Also, using a rolling average to smooth the lines and be able to see the patterns
+
+```{r, message=FALSE,  out.width='100%'}
+over_1death1m <- top_deaths_countries_df %>% 
+  mutate(Deaths_by_1Mpop = Deaths/Population*1e6)  %>% 
+  group_by(Country) %>% 
+  filter(Deaths_by_1Mpop >= 1) %>% 
+  top_n(1, -Deaths_by_1Mpop) %>% 
+  group_split() %>% 
+  map_dfr(~ .x %>% head(1)) %>% 
+  select(Country, Date_over_1death = Date)
+
+days_since_1death1m <- top_deaths_countries_df %>% 
+  mutate(Deaths_by_1Mpop = Deaths/Population*1e6) %>% 
+  group_by(Country) %>% 
+  group_split() %>% 
+  map_dfr(~ .x %>% 
+            mutate(Deaths_by_1Mpop_lag = lag(Deaths_by_1Mpop, 1),
+                   Daily_deaths_by_1Mpop = Deaths_by_1Mpop - Deaths_by_1Mpop_lag,
+                   Daily_deaths_by_1Mpop_lag3 = lead(Daily_deaths_by_1Mpop, 3),
+                   SMA_daily_deaths_1M = forecast::ma(Daily_deaths_by_1Mpop_lag3, 7, centre = T) %>% as.vector(),
+                   SMA_daily_deaths_1M = dplyr::lag(SMA_daily_deaths_1M, 6))) %>%
+  select(-Deaths_by_1Mpop_lag, -Daily_deaths_by_1Mpop_lag3) %>% 
+  filter(Deaths_by_1Mpop >= 1) %>% 
+  ungroup() %>% 
+  inner_join(over_1death1m, by = "Country") %>%  
+  mutate(Days_since_1death = difftime(Date, Date_over_1death, units = "days") %>% as.integer())
+
+top_10_sma_daily_deaths_1m_countries <- days_since_1death1m %>% 
+  group_by(Country) %>% 
+  filter(SMA_daily_deaths_1M == max(SMA_daily_deaths_1M)) %>% 
+  ungroup() %>% 
+  top_n(10, SMA_daily_deaths_1M) %>% 
+  pull(Country)
+
+deaths_1day_1m_plot <- days_since_1death1m %>% 
+  mutate(top10_country = if_else(Country %in% top_10_sma_daily_deaths_1m_countries, TRUE, FALSE),
+         CountryLabel = if_else(top10_country, Country, NA_character_)) %>% 
+  select(-Deaths) %>% 
+  rename(Day = Days_since_1death,
+         Deaths = SMA_daily_deaths_1M) %>% 
+  mutate(Deaths = round(Deaths, 2)) %>% 
+  ggplot() + 
+  geom_line(data = . %>% filter(!is.na(CountryLabel)), aes(Day, Deaths, col = CountryLabel), size = 1) +
+  geom_line(data = . %>% filter(is.na(CountryLabel)), 
+            aes(Day, Deaths, group = Country), col = "grey", alpha = .5) +
+  labs(title = "Seven-day moving average daily deaths",
+       subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
+       caption = "Source: covid19datahub.io") + 
+  theme_minimal() + 
+  theme_custom() +
+  scale_color_tableau() +
+  NULL
+
+deaths_1day_1m_plot %>% 
+  ggplotly() %>%
+  layout(title = 
+           list(text = paste0('Seven-day moving average daily deaths',
+                              '<br>',
+                              '<sup>',
+                              'X-axis counts days since 1 death by 1M pop for each country',
+                              '</sup>')),
+         legend = list(orientation = "h", y = 0),
+         annotations = 
+           list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
+                showarrow = F, xref = 'paper', yref = 'paper',
+                font = list(size = 10, color = "black")))
+
+```
+
+
+
+##### Now we will add to the analysis the track record of deaths from last years for some european countries. I'm trying to calibrate if reported deaths due to COVID match real deaths data.
+
+
+```{r, message=FALSE}
+df <- readr::read_csv("https://www.mortality.org/Public/STMF/Outputs/stmf.csv", skip=1)
+
+deaths <- df %>% 
+  rename(Deaths = DTotal) %>% 
+  filter(Sex == "b") %>% 
+  # filter(Year >= 2010) %>% 
+  select(CountryCode, Year, Week, Deaths) %>% 
+  mutate(CountryCode = recode(CountryCode,
+                              "DEUTNP" = "DEU",
+                              "GBRTENW" = "GBR"),
+         Country = recode(CountryCode, 
+                          "AUT" = "Austria",
+                          "BEL" = "Belgium",
+                          "DNK" = "Denmark",
+                          "ESP" = "Spain", 
+                          "GBR" = "Great Britain",
+                          "DEU" = "Germany", 
+                          "NLD" = "Netherlands", 
+                          "PRT" = "Portugal", 
+                          "SWE" = "Sweden")) %>% 
+  filter(!CountryCode %in% c("FIN", "NOR", "USA", "ISL")) 
+
+mean_deaths <- deaths %>% 
+  filter(Year != 2020) %>% 
+  group_by(Country, Week) %>% 
+  summarise(Mean_deaths = Deaths %>% mean() %>% round()) %>% 
+  ungroup() 
+
+deaths2 <- deaths %>% 
+  left_join(mean_deaths, by = c("Country", "Week")) %>% 
+  mutate(Excess_deaths = Deaths - Mean_deaths) 
+```
+
+##### This is the weekly evolution of deaths over the past few years, being highlighted in orange the actual deaths in 2020.
+
+```{r, fig.width = 10, fig.height = 6}
+deaths2 %>% 
+  ggplot() + 
+  geom_line(aes(Week, Deaths, group = Year), col = "lightblue", alpha = .75) + 
+  geom_line(aes(Week, Mean_deaths), col = "steelblue", size = .75, alpha = .8) + 
+  geom_line(data = . %>% filter(Year == 2020), aes(Week, Deaths), col = "darkorange", size = 1.1) + 
+  facet_wrap(~Country, scales = "free") + 
+  labs(caption = "Source: The Human Mortality Database",
+       title = "Weekly deaths <b style = 'color:darkorange'>in 2020</b> vs 
+                <span style = 'color:steelblue'>past years</span> and 
+                <b style = 'color:steelblue'>their mean</b>") +
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 12, face = "bold"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_blank(),
+        panel.grid = element_blank(),
+        plot.title = ggtext::element_markdown(size = 16)
+  ) +
+  NULL
+
+```
+
+
+
+##### Lastly, I will plot the excess of deaths of this year compared to the mean of previous years and to the official COVID deaths. It seems like certain countries are having some trouble with the reports... 
+
+```{r}
+deaths3 <- deaths2 %>% 
+  filter(Year == 2020, Week >= 9, Excess_deaths >= 0) %>%
+  group_by(Country) %>% 
+  mutate(Cum_mean_deaths = cumsum(Mean_deaths),
+         Cum_excess_deaths = cumsum(Excess_deaths),
+         Max_week = max(Week),
+         Max_excess_deaths = max(Excess_deaths)) %>% 
+  top_n(1, Week) %>%
+  mutate(ExcessRatio = round(100*Cum_excess_deaths/Cum_mean_deaths, 1)) %>% 
+  select(Country, Year, Week, ExcessRatio, Max_week, Max_excess_deaths) %>% 
+  left_join(deaths2, ., by = c("Year", "Week", "Country"))
+
+
+covid_weekly_deaths <- covid_deaths %>%
+  rename(Cum_deaths = Deaths) %>% 
+  filter(Country %in% c("AUT", "BEL", "DNK", "DEU", "GBR", "NLD", "PRT", "ESP", "SWE")) %>% 
+  group_by(Country) %>% 
+  mutate(Cum_deaths_lag = lag(Cum_deaths, 1),
+         Deaths = Cum_deaths - Cum_deaths_lag) %>% 
+  group_by(Country, Week) %>% 
+  summarise(Covid_deaths = sum(Deaths)) %>% 
+  ungroup() %>% 
+  na.omit() %>% 
+  rename(CountryCode = Country) %>% 
+  mutate(Year = 2020)
+
+deaths4 <- deaths3 %>% 
+  left_join(covid_weekly_deaths, by = c("CountryCode", "Year", "Week"))
+
+```
+
+```{r, fig.width = 10, fig.height = 6}
+deaths4 %>% 
+  ggplot() +
+  geom_line(aes(Week, Excess_deaths, group = Year), col = "lightblue", alpha = .75) +
+  geom_line(data = . %>% filter(Year == 2020), aes(Week, Excess_deaths), col = "darkorange", size = 1) +
+  geom_line(data = . %>% filter(Year == 2020), aes(Week, Covid_deaths), col = "red", size = 1, na.rm = T) +
+  geom_area(data = . %>% filter(Year == 2020, Week >= 9, Excess_deaths > 0), aes(Week, Excess_deaths),
+            fill = "darkorange", size = 1, alpha = .15) +
+  geom_hline(yintercept = 0, size = 0.75, col = "steelblue") +
+  geom_label(aes(Max_week+5, exp(log(Max_excess_deaths)/1.2), label = paste0("+", ExcessRatio, "%")),
+             color = "darkorange", na.rm = T, fontface = "bold", size = 3, alpha = .5) +
+  facet_wrap(~Country, scales = "free") + 
+  labs(title = "<b style = 'color:darkorange'>Excess</b> deaths vs 
+                <b style = 'color:red'>reported COVID</b> deaths",
+       subtitle = "<b style = 'color:darkorange'>Ratio</b> shows death increase respect to last years average",
+       caption = "**Source:**
+                <b style = 'color:steelblue'>The Human Mortality Database</b> **&** 
+                <b style = 'color:red'>COVID-19 Data Hub</b>") +
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 12, face = "bold"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_blank(),
+        panel.grid = element_blank(),
+        plot.title = ggtext::element_markdown(size = 16),
+        plot.subtitle = ggtext::element_markdown(size = 11), 
+        plot.caption = ggtext::element_markdown(size = 8), 
+  ) +
+  NULL
+```
+
+##### For the next take, I'll try to get fresh data from more countries, including some non european ones, to see how are dealing with numbers in Asia and America.
+
+### And that's all for now folks!
