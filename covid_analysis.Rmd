@@ -10,10 +10,15 @@ editor_options:
   chunk_output_type: console
 ---
 
-##### The idea behind this document was to play and discover some of the info contained in the [COVID19 R package](https://CRAN.R-project.org/package=COVID19) which collects data across several governmental sources. This package is being developed by the Guidotti and Ardia from [COVID19 Data Hub](https://covid19datahub.io). 
+## Introduction
+
+##### The idea behind this post was to play and discover some of the info contained in the [COVID19 R package](https://CRAN.R-project.org/package=COVID19) which collects data across several governmental sources.This package is being developed by the Guidotti and Ardia from [COVID19 Data Hub](https://covid19datahub.io). 
+
 ##### Later, I will add to the analysis the historical track record of deaths over last years for some european countries and try to address if deaths by COVID19 are being reported accurately. This data is collected in [The Human Mortality Database](https://www.mortality.org/).
 
-##### Altough it may seem a bit overkill, I am showing all the code right here because that's the main idea of the blog. It was such an intensive Tidyverse exercise. You might pick up a couple of tricks like the use of ```split_group() + map()``` or the recently discovered package [ggtext](https://wilkelab.org/ggtext/).
+##### Altough it may seem a bit overkill, it was such an intensive Tidyverse exercise that I decided to show pretty much all the code right here because that is what this post is about: I don't intend to perform a really deep analysis but to show a kind of simple way to tackle this problem using R and the Tidyverse toolkit. 
+
+#####  You might pick up a couple of tricks like the use of ```split_group() + map()``` to manipulate each group freely, using the ```{{}}``` ([bang bang operator](https://www.tidyverse.org/blog/2019/06/rlang-0-4-0/)) to write programatic dplyr code, some custom plotting with [plotly](https://plotly.com/ggplot2/) or the recently discovered package [ggtext](https://wilkelab.org/ggtext/) by [\@ClausWilke](https://twitter.com/ClausWilke).
 
 ```{r, message=FALSE, warning=FALSE, echo=FALSE}
 library(COVID19)
@@ -22,7 +27,6 @@ library(lubridate)
 library(magrittr)
 library(ggplot2)
 library(ggthemes)
-library(ggrepel)
 library(plotly)
 ```
 
@@ -39,7 +43,9 @@ theme_custom <- function() {
 }
 ```
 
-##### I wanted to focus mainly on the most populated countries of the world because some of them are among the most affected by the virus
+## Playing with COVID19 package
+
+##### Let's start by loading data from COVID19 package with  ```covid19``` function. It contains lots of information, but I will keep things simple and work only with ```Country```, ```Date```, ```Population``` and ```Deaths``` variables. 
 
 ```{r}
 covid_deaths <- covid19(verbose = FALSE) %>%
@@ -48,108 +54,116 @@ covid_deaths <- covid19(verbose = FALSE) %>%
   select(Country = id, Date = date, Week, Deaths = deaths, Population = population) %>% 
   filter(Date < today() %>% add(days(-1))) %>% 
   mutate(Deaths_by_1Mpop = round(Deaths/Population*1e6)) 
-
-top_deaths_countries_df <- covid_deaths %>% 
-  group_by(Date) %>% 
-  top_n(100, Population) %>% 
-  ungroup()
 ```
 
+##### I wanted to focus mainly on the most populated countries of the world because some of them are among the most affected by the virus, so I created a function for that as I will use it more than once.
+
+```{r}
+get_top_countries_df <- function(covid_deaths, top_by, top_n, since){
+  covid_deaths %>% 
+    group_by(Date) %>% 
+    top_n(100, Population) %>% 
+    group_by(Country) %>% 
+    filter(Date == max(Date)) %>% 
+    ungroup() %>% 
+    top_n(top_n, {{top_by}}) %>% 
+    select(Country) %>% 
+    inner_join(covid_deaths, ., by = "Country") %>% 
+    filter(Date >= ymd(since))
+}
+```
+
+##### Starting with a basic plot. You have already seen this one a thousand of times.
+
 ```{r, out.width='100%'}
-top_deaths_countries <- top_deaths_countries_df %>% 
-  group_by(Country) %>% 
-  filter(Date == max(Date)) %>% 
-  ungroup() %>% 
-  top_n(10, Deaths) %>% 
-  pull(Country) 
 
-top_pop_deaths <- covid_deaths %>% 
-  filter(Country %in% top_deaths_countries)
-
-deaths_plot <- top_pop_deaths %>% 
-  filter(Date >= ymd(20200301)) %>% 
-  ggplot(aes(Date, Deaths, col = Country)) + 
-  geom_line(size = 1, show.legend = F) +
-  labs(title = "Total deaths due to COVID-19", 
-       caption = "Source: covid19datahub.io") + 
-  theme_minimal() + 
-  theme_custom() +
-  scale_color_tableau() +
-  NULL
-
-deaths_plot %>%
-  ggplotly() %>%
+ggplotly(
+  covid_deaths %>% 
+    get_top_countries_df(top_by = Deaths, top_n = 10, since = 20200301) %>% 
+    ggplot(aes(Date, Deaths, col = Country)) + 
+    geom_line(size = 1, show.legend = F) +
+    labs(title = "Total deaths due to COVID-19", 
+         caption = "Source: covid19datahub.io") + 
+    theme_minimal() + 
+    theme_custom() +
+    scale_color_tableau() +
+    NULL
+) %>%
   layout(legend = list(orientation = "h", y = 0),
          annotations = list(x = 1, y = 1.05, text = "Source: covid19datahub.io",
                             showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
 ```
 
-##### What about the countries most affected by the virus in deaths relative to the population?
+##### What about the countries most affected by the virus in deaths relative to the population? Pretty basic too.
 
 ```{r, out.width='100%'}
-top_deaths1m_countries <- top_deaths_countries_df %>% 
-  group_by(Country) %>% 
-  filter(Date == max(Date)) %>% 
-  ungroup() %>% 
-  top_n(10, Deaths_by_1Mpop) %>% 
-  pull(Country) 
-
-top_pop_deaths1m <- covid_deaths %>% 
-  filter(Country %in% top_deaths1m_countries)
-
-top_deaths_1m_plot <- top_pop_deaths1m %>% 
-  filter(Date >= ymd(20200301)) %>% 
-  select(-Deaths) %>% 
-  rename(Deaths = Deaths_by_1Mpop) %>% 
-  ggplot(aes(Date, Deaths, col = Country)) + 
-  geom_line(size = 1, show.legend = F) +
-  labs(title = "Total deaths per million people", 
-       caption = "Source: covid19datahub.io") + 
-  theme_minimal() + 
-  theme_custom() + 
-  scale_color_tableau() +
-  NULL
-
-top_deaths_1m_plot %>% 
-  ggplotly() %>%
+ggplotly(
+  covid_deaths %>% 
+    get_top_countries_df(top_by = Deaths_by_1Mpop, top_n = 10, since = 20200301) %>% 
+    select(-Deaths) %>% 
+    rename(Deaths = Deaths_by_1Mpop) %>% 
+    ggplot(aes(Date, Deaths, col = Country)) + 
+    geom_line(size = 1, show.legend = F) +
+    labs(title = "Total deaths per million people", 
+         caption = "Source: covid19datahub.io") + 
+    theme_minimal() + 
+    theme_custom() + 
+    scale_color_tableau() +
+    NULL
+) %>% 
   layout(legend = list(orientation = "h", y = 0),
          annotations = list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
                             showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
 ```
 
-##### Now, the pandemic didn't explode in every country at the same time. Because of the exponential nature of the problem, it is also useful to display the information relative to the day certain number of cases or deaths are reached. Here I'm showing in logarithmic scale the evolution of deaths since the day 1 death per million people were counted.
+##### Now, the pandemic didn't explode in each country at the same time. Because of the exponential nature of the problem, it is also useful to display the information relative to the day certain number of confirmed cases or deaths are reached. 
+##### I will use a couple of functions for that:
+
+```{r}
+get_date_since_ndeaths <- function(covid_deaths, since_var, first_n){
+  
+  covid_deaths %>% 
+    group_by(Country) %>% 
+    filter({{since_var}} >= first_n) %>% 
+    top_n(1, -{{since_var}}) %>% 
+    group_split() %>% 
+    map_dfr(~ .x %>% head(1)) %>% 
+    select(Country, Date_since_ndeaths = Date)
+}
+
+get_deaths_since_event <- function(covid_deaths, since_var, first_n){
+  
+  date_since_ndeaths <- get_date_since_ndeaths(covid_deaths, {{since_var}}, first_n)
+  
+  covid_deaths %>% 
+    group_by(Country) %>% 
+    filter({{since_var}} >= first_n) %>% 
+    ungroup() %>% 
+    left_join(date_since_ndeaths, by = "Country") %>%  
+    mutate(Days_since_ndeaths = difftime(Date, Date_since_ndeaths, units = "days") %>% as.integer()) %>% 
+    rename(Day = Days_since_ndeaths)
+}
+```
+
+##### Here I'm showing in logarithmic scale the evolution of (cumulative) deaths since the first day 1 death per million people were counted:
 
 ```{r, out.width='100%'}
-top_over_1death1m <- top_pop_deaths1m %>% 
-  group_by(Country) %>% 
-  filter(Deaths_by_1Mpop >= 1) %>% 
-  top_n(1, -Deaths_by_1Mpop) %>% 
-  group_split() %>% 
-  map_dfr(~ .x %>% head(1)) %>% 
-  select(Country, Date_over_1death = Date)
 
-top_days_since_1death1m <- top_pop_deaths1m %>% 
-  group_by(Country) %>% 
-  filter(Deaths_by_1Mpop >= 1) %>% 
-  ungroup() %>% 
-  left_join(top_over_1death1m, by = "Country") %>%  
-  mutate(Days_since_1death = difftime(Date, Date_over_1death, units = "days") %>% as.integer())
-
-top_deaths_1day_1m_plot <- top_days_since_1death1m %>% 
-  rename(Day = Days_since_1death) %>% 
-  ggplot(aes(Day, Deaths_by_1Mpop, col = Country)) + 
-  geom_line(size = 1, show.legend = F) +
-  scale_y_log10() + 
-  labs(title = "Total deaths per million people",
-       subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
-       caption = "Source: covid19datahub.io") + 
-  theme_minimal() + 
-  theme_custom() +
-  scale_color_tableau() +
-  NULL
-
-top_deaths_1day_1m_plot %>% 
-  ggplotly() %>%
+ggplotly(
+  covid_deaths %>% 
+    get_top_countries_df(top_by = Deaths_by_1Mpop, top_n = 10, since = 20200101) %>% 
+    get_deaths_since_event(since_var = Deaths_by_1Mpop, first_n = 1) %>% 
+    ggplot(aes(Day, Deaths_by_1Mpop, col = Country)) + 
+    geom_line(size = 1, show.legend = F) +
+    scale_y_log10() + 
+    labs(title = "Total deaths per million people",
+         subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
+         caption = "Source: covid19datahub.io") + 
+    theme_minimal() + 
+    theme_custom() +
+    scale_color_tableau() +
+    NULL
+) %>%
   layout(title = 
            list(text = paste0('Total deaths per million people',
                               '<br>',
@@ -162,62 +176,68 @@ top_deaths_1day_1m_plot %>%
                 showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
 ```
 
-##### It is also useful to look at the current trend: How is the evolution of the daily new deaths? I'm showing here the daily deaths per million population to have a better sense of the severity of the current state in each country. Also, using a rolling average to smooth the lines and be able to see the patterns
+##### It is also useful to look at the current trend: How is the evolution of the daily new deaths? Also, using a rolling average will smooth the lines and we will be able to see the patterns more clearly. Again defining the functions first:
 
 ```{r, message=FALSE,  out.width='100%'}
-over_1death1m <- top_deaths_countries_df %>% 
-  mutate(Deaths_by_1Mpop = Deaths/Population*1e6)  %>% 
-  group_by(Country) %>% 
-  filter(Deaths_by_1Mpop >= 1) %>% 
-  top_n(1, -Deaths_by_1Mpop) %>% 
-  group_split() %>% 
-  map_dfr(~ .x %>% head(1)) %>% 
-  select(Country, Date_over_1death = Date)
 
-days_since_1death1m <- top_deaths_countries_df %>% 
-  mutate(Deaths_by_1Mpop = Deaths/Population*1e6) %>% 
-  group_by(Country) %>% 
-  group_split() %>% 
-  map_dfr(~ .x %>% 
-            mutate(Deaths_by_1Mpop_lag = lag(Deaths_by_1Mpop, 1),
-                   Daily_deaths_by_1Mpop = Deaths_by_1Mpop - Deaths_by_1Mpop_lag,
-                   Daily_deaths_by_1Mpop_lag3 = lead(Daily_deaths_by_1Mpop, 3),
-                   SMA_daily_deaths_1M = forecast::ma(Daily_deaths_by_1Mpop_lag3, 7, centre = T) %>% as.vector(),
-                   SMA_daily_deaths_1M = dplyr::lag(SMA_daily_deaths_1M, 6))) %>%
-  select(-Deaths_by_1Mpop_lag, -Daily_deaths_by_1Mpop_lag3) %>% 
-  filter(Deaths_by_1Mpop >= 1) %>% 
-  ungroup() %>% 
-  inner_join(over_1death1m, by = "Country") %>%  
-  mutate(Days_since_1death = difftime(Date, Date_over_1death, units = "days") %>% as.integer())
+get_rolling_deaths_since_event <- function(covid_deaths, since_var, first_n){
+  
+  date_since_ndeaths <- get_date_since_ndeaths(covid_deaths, {{since_var}}, first_n)
+  
+  covid_deaths %>% 
+    group_by(Country) %>% 
+    group_split() %>% 
+    map_dfr(
+      ~ .x %>% 
+        mutate(Deaths_by_1Mpop_lag = lag({{since_var}}, 1),
+               Daily_deaths_by_1Mpop = {{since_var}} - Deaths_by_1Mpop_lag,
+               Daily_deaths_by_1Mpop_lag3 = lead(Daily_deaths_by_1Mpop, 3),
+               SMA_daily_deaths_1M = forecast::ma(Daily_deaths_by_1Mpop_lag3, 7, centre = T) %>% as.vector(),
+               SMA_daily_deaths_1M = dplyr::lag(SMA_daily_deaths_1M, 6))) %>%
+    select(-Deaths_by_1Mpop_lag, -Daily_deaths_by_1Mpop_lag3) %>% 
+    filter({{since_var}} >= first_n) %>% 
+    ungroup() %>% 
+    inner_join(date_since_ndeaths, by = "Country") %>%  
+    mutate(Days_since_ndeaths = difftime(Date, Date_since_ndeaths, units = "days") %>% as.integer())
+}
 
-top_10_sma_daily_deaths_1m_countries <- days_since_1death1m %>% 
-  group_by(Country) %>% 
-  filter(SMA_daily_deaths_1M == max(SMA_daily_deaths_1M)) %>% 
-  ungroup() %>% 
-  top_n(10, SMA_daily_deaths_1M) %>% 
-  pull(Country)
+get_top_countries_when_var_max <- function(covid_deaths, top_by, top_n){
+  covid_deaths %>%
+    group_by(Country) %>%
+    filter({{top_by}} == max({{top_by}})) %>%
+    group_split() %>% 
+    map_dfr(~ .x %>% head(1)) %>% 
+    ungroup() %>%
+    top_n(top_n, {{top_by}}) %>%
+    select(Country) %>% 
+    mutate(Top_country = TRUE)
+}
+```
+##### I'm showing here the smoothed daily deaths per million population to have a better sense of the pandemic current state in each country.
 
-deaths_1day_1m_plot <- days_since_1death1m %>% 
-  mutate(top10_country = if_else(Country %in% top_10_sma_daily_deaths_1m_countries, TRUE, FALSE),
-         CountryLabel = if_else(top10_country, Country, NA_character_)) %>% 
-  select(-Deaths) %>% 
-  rename(Day = Days_since_1death,
-         Deaths = SMA_daily_deaths_1M) %>% 
-  mutate(Deaths = round(Deaths, 2)) %>% 
-  ggplot() + 
-  geom_line(data = . %>% filter(!is.na(CountryLabel)), aes(Day, Deaths, col = CountryLabel), size = 1) +
-  geom_line(data = . %>% filter(is.na(CountryLabel)), 
-            aes(Day, Deaths, group = Country), col = "grey", alpha = .5) +
-  labs(title = "Seven-day moving average daily deaths",
-       subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
-       caption = "Source: covid19datahub.io") + 
-  theme_minimal() + 
-  theme_custom() +
-  scale_color_tableau() +
-  NULL
-
-deaths_1day_1m_plot %>% 
-  ggplotly() %>%
+```{r, message=FALSE,  out.width='100%'}
+ggplotly(
+  covid_deaths %>% 
+    get_top_countries_df(top_by = Deaths_by_1Mpop, top_n = 100, since = 20200101) %>% 
+    get_rolling_deaths_since_event(Deaths_by_1Mpop, 1) %>% 
+    left_join(get_top_countries_when_var_max(., SMA_daily_deaths_1M, 10), by = "Country") %>% 
+    mutate(Top_country = if_else(is.na(Top_country), FALSE, TRUE),
+           CountryLabel = if_else(Top_country, Country, NA_character_)) %>%
+    select(-Deaths) %>% 
+    rename(Day = Days_since_ndeaths,
+           Deaths = SMA_daily_deaths_1M) %>% 
+    mutate(Deaths = round(Deaths, 2)) %>% 
+    ggplot() + 
+    geom_line(data = . %>% filter(Top_country), aes(Day, Deaths, col = CountryLabel), size = 1) +
+    geom_line(data = . %>% filter(!Top_country), aes(Day, Deaths, group = Country), col = "grey", alpha = .5) +
+    labs(title = "Seven-day moving average daily deaths",
+         subtitle = "X-axis counts days since 1 death by 1M pop for each country", 
+         caption = "Source: covid19datahub.io") + 
+    theme_minimal() + 
+    theme_custom() +
+    scale_color_tableau() +
+    NULL
+) %>%
   layout(title = 
            list(text = paste0('Seven-day moving average daily deaths',
                               '<br>',
@@ -231,7 +251,7 @@ deaths_1day_1m_plot %>%
 
 ```
 
-
+## Looking into the Human Mortality Database
 
 ##### Now we will add to the analysis the track record of deaths from last years for some european countries. I'm trying to calibrate if reported deaths due to COVID match real deaths data.
 
@@ -242,7 +262,6 @@ df <- readr::read_csv("https://www.mortality.org/Public/STMF/Outputs/stmf.csv", 
 deaths <- df %>% 
   rename(Deaths = DTotal) %>% 
   filter(Sex == "b") %>% 
-  # filter(Year >= 2010) %>% 
   select(CountryCode, Year, Week, Deaths) %>% 
   mutate(CountryCode = recode(CountryCode,
                               "DEUTNP" = "DEU",
@@ -291,12 +310,9 @@ deaths2 %>%
         plot.title = ggtext::element_markdown(size = 16)
   ) +
   NULL
-
 ```
 
-
-
-##### Lastly, I will plot the excess of deaths of this year compared to the mean of previous years and to the official COVID deaths. It seems like certain countries are having some trouble with the reports... 
+##### To calculate the excess ratio, comparing the cumulative deaths from this and previous years is needed.
 
 ```{r}
 deaths3 <- deaths2 %>% 
@@ -327,8 +343,9 @@ covid_weekly_deaths <- covid_deaths %>%
 
 deaths4 <- deaths3 %>% 
   left_join(covid_weekly_deaths, by = c("CountryCode", "Year", "Week"))
-
 ```
+
+##### Lastly, I will plot the excess of deaths of this year compared to the mean of previous years and to the official COVID deaths.
 
 ```{r, fig.width = 10, fig.height = 6}
 deaths4 %>% 
@@ -360,6 +377,7 @@ deaths4 %>%
   NULL
 ```
 
+##### It seems like certain countries are having some trouble with the reports, doesn't it?
 ##### For the next take, I'll try to get fresh data from more countries, including some non european ones, to see how are dealing with numbers in Asia and America.
 
 ### And that's all for now folks!
