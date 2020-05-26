@@ -13,7 +13,7 @@ editor_options:
 ##### The idea behind this document was to play and discover some of the info contained in the [COVID19 R package](https://CRAN.R-project.org/package=COVID19) which collects data across several governmental sources. This package is being developed by the Guidotti and Ardia from [COVID19 Data Hub](https://covid19datahub.io). 
 ##### Later, I will add to the analysis the historical track record of deaths over last years for some european countries and try to address if deaths by COVID19 are being reported accurately. This data is collected in [The Human Mortality Database](https://www.mortality.org/).
 
-##### Altough it may seem a bit overkill, I am showing all the code because that's the main idea of the blog and there are already many other sources where you can find deep analysis
+##### Altough it may seem a bit overkill, I am showing all the code right here because that's the main idea of the blog. It was such an intensive Tidyverse exercise. You might pick up a couple of tricks like the use of ```split_group() + map()``` or the recently discovered package [ggtext](https://wilkelab.org/ggtext/).
 
 ```{r, message=FALSE, warning=FALSE, echo=FALSE}
 library(COVID19)
@@ -39,7 +39,7 @@ theme_custom <- function() {
 }
 ```
 
-##### I want to focus mainly on the most populated countries of the world because some of them are among the most affected by the virus
+##### I wanted to focus mainly on the most populated countries of the world because some of them are among the most affected by the virus
 
 ```{r}
 covid_deaths <- covid19(verbose = FALSE) %>%
@@ -103,7 +103,7 @@ top_deaths_1m_plot <- top_pop_deaths1m %>%
   rename(Deaths = Deaths_by_1Mpop) %>% 
   ggplot(aes(Date, Deaths, col = Country)) + 
   geom_line(size = 1, show.legend = F) +
-  labs(title = "Total deaths by 1M people", 
+  labs(title = "Total deaths per million people", 
        caption = "Source: covid19datahub.io") + 
   theme_minimal() + 
   theme_custom() + 
@@ -159,8 +159,7 @@ top_deaths_1day_1m_plot %>%
          legend = list(orientation = "h", y = 0),
          annotations = 
            list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
-                showarrow = F, xref = 'paper', yref = 'paper',
-                font = list(size = 10, color = "black")))
+                showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
 ```
 
 ##### It is also useful to look at the current trend: How is the evolution of the daily new deaths? I'm showing here the daily deaths per million population to have a better sense of the severity of the current state in each country. Also, using a rolling average to smooth the lines and be able to see the patterns
@@ -228,8 +227,7 @@ deaths_1day_1m_plot %>%
          legend = list(orientation = "h", y = 0),
          annotations = 
            list(x = 1, y = 1.05, text = "Source: covid19datahub.io", 
-                showarrow = F, xref = 'paper', yref = 'paper',
-                font = list(size = 10, color = "black")))
+                showarrow = F, xref = 'paper', yref = 'paper', font = list(size = 10)))
 
 ```
 
@@ -341,8 +339,8 @@ deaths4 %>%
   geom_area(data = . %>% filter(Year == 2020, Week >= 9, Excess_deaths > 0), aes(Week, Excess_deaths),
             fill = "darkorange", size = 1, alpha = .15) +
   geom_hline(yintercept = 0, size = 0.75, col = "steelblue") +
-  geom_label(aes(Max_week+5, exp(log(Max_excess_deaths)/1.2), label = paste0("+", ExcessRatio, "%")),
-             color = "darkorange", na.rm = T, fontface = "bold", size = 3, alpha = .5) +
+  geom_label(aes(Max_week+7, exp(log(Max_excess_deaths)/1.2), label = paste0("+", ExcessRatio, "%")),
+             color = "darkorange", na.rm = T, fontface = "bold", size = 3.5, alpha = .5) +
   facet_wrap(~Country, scales = "free") + 
   labs(title = "<b style = 'color:darkorange'>Excess</b> deaths vs 
                 <b style = 'color:red'>reported COVID</b> deaths",
@@ -351,7 +349,7 @@ deaths4 %>%
                 <b style = 'color:steelblue'>The Human Mortality Database</b> **&** 
                 <b style = 'color:red'>COVID-19 Data Hub</b>") +
   theme_minimal() + 
-  theme(strip.text = element_text(size = 12, face = "bold"),
+  theme(strip.text = element_text(size = 11, face = "bold"),
         axis.title.x = element_text(size = 12),
         axis.title.y = element_blank(),
         panel.grid = element_blank(),
